@@ -1,321 +1,384 @@
-from flask import Flask, request, jsonify, send_file
-import pandas as pd
 import os
-import datetime
-import instaloader
-import re
+import io
+import base64
+import tempfile
+import random
+from datetime import datetime, timedelta
 from collections import Counter
+import pandas as pd
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 import seaborn as sns
-import plotly.express as px
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+import instaloader
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='.')
+app.config['SECRET_KEY'] = 'instagram_analyzer_secret_key'
 
-# Global variable to store scraped data
-scraped_data = None
+# Enable CORS for all routes
+CORS(app)
 
-# --- Scraper Functions (from scraper.py) ---
-def scrape_instagram_profile(username):
-    L = instaloader.Instaloader()
-    # You might need to login if the profile is private or to avoid rate limits
-    # L.load_session_from_file(YOUR_USERNAME, YOUR_SESSION_FILE_PATH)
+class InstagramAnalyzer:
+    def __init__(self):
+        self.loader = instaloader.Instaloader()
+        # Disable downloading of posts, videos, etc.
+        self.loader.download_pictures = False
+        self.loader.download_videos = False
+        self.loader.download_video_thumbnails = False
+        self.loader.download_geotags = False
+        self.loader.download_comments = False
+        self.loader.save_metadata = False
+        
+    def extract_username(self, input_str):
+        """Extract username from Instagram URL or return as-is if it's already a username"""
+        input_str = input_str.strip()
+        
+        # If it's a URL, extract username
+        if 'instagram.com' in input_str:
+            # Handle various Instagram URL formats
+            if '/p/' in input_str:
+                # Post URL - extract username from the URL structure
+                parts = input_str.split('/')
+                if 'instagram.com' in parts:
+                    idx = parts.index('instagram.com')
+                    if idx + 1 < len(parts) and parts[idx + 1]:
+                        return parts[idx + 1]
+            else:
+                # Profile URL
+                parts = input_str.split('/')
+                for i, part in enumerate(parts):
+                    if 'instagram.com' in part and i + 1 < len(parts):
+                        username = parts[i + 1]
+                        # Remove query parameters
+                        username = username.split('?')[0]
+                        return username
+        
+        # If it's already a username (no URL), return as-is
+        return input_str.replace('@', '')
+    
+    def get_profile_posts(self, username):
+        """Get post metadata from Instagram profile"""
+        try:
+            profile = instaloader.Profile.from_username(self.loader.context, username)
+            
+            posts_data = []
+            post_count = 0
+            
+            # Limit to recent posts to avoid rate limiting
+            for post in profile.get_posts():
+                if post_count >= 100:  # Limit to last 100 posts
+                    break
+                    
+                post_data = {
+                    'date': post.date_utc.strftime('%Y-%m-%d'),
+                    'time': post.date_utc.strftime('%H:%M:%S'),
+                    'datetime': post.date_utc,
+                    'day_of_week': post.date_utc.strftime('%A'),
+                    'hour': post.date_utc.hour,
+                    'type': 'video' if post.is_video else 'image'
+                }
+                posts_data.append(post_data)
+                post_count += 1
+            
+            return {
+                'success': True,
+                'username': username,
+                'total_posts': len(posts_data),
+                'posts': posts_data,
+                'profile_info': {
+                    'followers': profile.followers,
+                    'following': profile.followees,
+                    'total_posts': profile.mediacount
+                }
+            }
+            
+        except instaloader.exceptions.ProfileNotExistsException:
+            return {'success': False, 'error': 'Profile not found'}
+        except instaloader.exceptions.PrivateProfileNotFollowedException:
+            return {'success': False, 'error': 'Profile is private'}
+        except Exception as e:
+            return {'success': False, 'error': f'Error fetching profile: {str(e)}'}
+    
+    def analyze_posting_patterns(self, posts_data):
+        """Analyze posting patterns and generate visualizations"""
+        if not posts_data:
+            return {'success': False, 'error': 'No posts data to analyze'}
+        
+        df = pd.DataFrame(posts_data)
+        
+        # Day of week analysis
+        day_counts = df['day_of_week'].value_counts()
+        day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        day_counts = day_counts.reindex(day_order, fill_value=0)
+        
+        # Hour analysis
+        hour_counts = df['hour'].value_counts().sort_index()
+        
+        # Generate charts
+        charts = self.generate_charts(day_counts, hour_counts)
+        
+        return {
+            'success': True,
+            'day_analysis': day_counts.to_dict(),
+            'hour_analysis': hour_counts.to_dict(),
+            'charts': charts,
+            'post_table': df[['date', 'time', 'day_of_week', 'type']].to_dict('records')
+        }
+    
+    def generate_charts(self, day_counts, hour_counts):
+        """Generate base64 encoded charts"""
+        charts = {}
+        
+        # Set style
+        plt.style.use('default')
+        sns.set_palette("husl")
+        
+        # Day of week chart
+        fig, ax = plt.subplots(figsize=(10, 6))
+        bars = ax.bar(day_counts.index, day_counts.values, color='skyblue', edgecolor='navy', alpha=0.7)
+        ax.set_title('Posts by Day of Week', fontsize=16, fontweight='bold')
+        ax.set_xlabel('Day of Week', fontsize=12)
+        ax.set_ylabel('Number of Posts', fontsize=12)
+        ax.tick_params(axis='x', rotation=45)
+        
+        # Add value labels on bars
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                   f'{int(height)}', ha='center', va='bottom')
+        
+        plt.tight_layout()
+        
+        # Convert to base64
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+        buffer.seek(0)
+        charts['day_chart'] = base64.b64encode(buffer.getvalue()).decode()
+        plt.close()
+        
+        # Hour chart
+        fig, ax = plt.subplots(figsize=(12, 6))
+        bars = ax.bar(hour_counts.index, hour_counts.values, color='lightcoral', edgecolor='darkred', alpha=0.7)
+        ax.set_title('Posts by Hour of Day', fontsize=16, fontweight='bold')
+        ax.set_xlabel('Hour of Day', fontsize=12)
+        ax.set_ylabel('Number of Posts', fontsize=12)
+        ax.set_xticks(range(0, 24))
+        
+        # Add value labels on bars
+        for bar in bars:
+            height = bar.get_height()
+            if height > 0:
+                ax.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                       f'{int(height)}', ha='center', va='bottom')
+        
+        plt.tight_layout()
+        
+        # Convert to base64
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+        buffer.seek(0)
+        charts['hour_chart'] = base64.b64encode(buffer.getvalue()).decode()
+        plt.close()
+        
+        return charts
 
-    try:
-        profile = instaloader.Profile.from_username(L.context, username)
-    except Exception as e:
-        print(f"Error: Could not load profile {username}. {e}")
-        return pd.DataFrame()
-
+def generate_mock_data():
+    """Generate mock Instagram post data for testing"""
     posts_data = []
-    for post in profile.get_posts():
-        posts_data.append({
-            'post_id': post.mediaid,
-            'caption': post.caption,
-            'likes': post.likes,
-            'comments': post.comments,
-            'views': post.video_view_count if post.is_video else None,
-            'post_type': 'video' if post.is_video else 'image',
-            'timestamp': post.date_utc
-        })
+    
+    # Generate 50 mock posts over the last 30 days
+    base_date = datetime.now() - timedelta(days=30)
+    
+    for i in range(50):
+        # Random date within last 30 days
+        random_days = random.randint(0, 30)
+        random_hours = random.randint(0, 23)
+        random_minutes = random.randint(0, 59)
+        
+        post_date = base_date + timedelta(days=random_days, hours=random_hours, minutes=random_minutes)
+        
+        post_data = {
+            'date': post_date.strftime('%Y-%m-%d'),
+            'time': post_date.strftime('%H:%M:%S'),
+            'datetime': post_date,
+            'day_of_week': post_date.strftime('%A'),
+            'hour': post_date.hour,
+            'type': random.choice(['image', 'video'])
+        }
+        posts_data.append(post_data)
+    
+    return posts_data
+
+def analyze_mock_patterns(posts_data):
+    """Analyze mock posting patterns"""
     df = pd.DataFrame(posts_data)
-    return df
-
-# --- Analyzer Functions (from analyzer.py, modified for offline NLP) ---
-def analyze_sentiment(text):
-    if not isinstance(text, str):
-        return 'neutral'
-    text = text.lower()
-    positive_words = ["love", "great", "happy", "amazing", "good", "best", "beautiful", "fun", "awesome", "wonderful", "incredible", "proud"]
-    negative_words = ["hate", "bad", "sad", "terrible", "worst", "ugly", "boring", "gloomy", "disappointed", "fail"]
     
-    sentiment_score = 0
-    for word in text.split():
-        if word in positive_words:
-            sentiment_score += 1
-        elif word in negative_words:
-            sentiment_score -= 1
-            
-    if sentiment_score > 0:
-        return "positive"
-    elif sentiment_score < 0:
-        return "negative"
-    else:
-        return "neutral"
+    # Day of week analysis
+    day_counts = df['day_of_week'].value_counts()
+    day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    day_counts = day_counts.reindex(day_order, fill_value=0)
+    
+    # Hour analysis
+    hour_counts = df['hour'].value_counts().sort_index()
+    
+    # Generate charts
+    charts = generate_mock_charts(day_counts, hour_counts)
+    
+    return {
+        'success': True,
+        'day_analysis': day_counts.to_dict(),
+        'hour_analysis': hour_counts.to_dict(),
+        'charts': charts,
+        'post_table': df[['date', 'time', 'day_of_week', 'type']].to_dict('records')
+    }
 
-def extract_hashtags(caption):
-    if not isinstance(caption, str):
-        return []
-    return re.findall(r"#(\w+)", caption.lower())
-
-def get_hashtag_frequency(df):
-    all_hashtags = []
-    for caption in df["caption"].dropna():
-        all_hashtags.extend(extract_hashtags(caption))
-    return Counter(all_hashtags)
-
-def extract_keywords_frequency(df, num_keywords=5):
-    all_words = []
-    for caption in df["caption"].dropna():
-        words = re.findall(r"\b\w+\b", caption.lower())
-        # Simple stop word removal
-        stop_words = set(["the", "a", "an", "is", "it", "in", "of", "and", "to", "for", "with", "on", "at", "by", "this", "that", "be", "from", "as", "i", "you", "he", "she", "we", "they", "my", "your", "his", "her", "our", "their", "was", "were", "had", "have", "has", "do", "does", "did", "will", "would", "can", "could", "should", "about", "out", "up", "down", "then", "there", "here", "when", "where", "why", "how", "what", "which", "who", "whom", "whose", "am", "are", "not", "no", "yes", "so", "but", "or", "if", "than", "than", "too", "very", "just", "only", "also", "much", "many", "some", "any", "all", "each", "every", "few", "more", "most", "other", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "s", "t", "can", "will", "just", "don", "should", "now"])
-        all_words.extend([word for word in words if word not in stop_words and len(word) > 2])
-    return Counter(all_words).most_common(num_keywords)
-
-def train_engagement_prediction_model(df):
-    # This function is kept as a placeholder. For truly offline and lightweight, 
-    # a pre-trained simple model or rule-based system would be needed.
-    # Given the constraint of no external models, this will just return None.
-    print("Engagement prediction model training is not supported in offline mode without external libraries.")
-    return None, None
-
-# --- Visualizer Functions (from visualizer.py) ---
-def plot_likes_comments_over_time(df, output_dir="./static/plots"):
-    os.makedirs(output_dir, exist_ok=True)
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df = df.sort_values(by="timestamp")
-
-    plt.figure(figsize=(12, 6))
-    plt.plot(df["timestamp"], df["likes"], label="Likes")
-    plt.plot(df["timestamp"], df["comments"], label="Comments")
-    plt.xlabel("Date")
-    plt.ylabel("Count")
-    plt.title("Likes and Comments Over Time")
-    plt.legend()
-    plt.grid(True)
+def generate_mock_charts(day_counts, hour_counts):
+    """Generate mock charts"""
+    charts = {}
+    
+    # Set style
+    plt.style.use('default')
+    sns.set_palette("husl")
+    
+    # Day of week chart
+    fig, ax = plt.subplots(figsize=(10, 6))
+    bars = ax.bar(day_counts.index, day_counts.values, color='skyblue', edgecolor='navy', alpha=0.7)
+    ax.set_title('Posts by Day of Week (Demo Data)', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Day of Week', fontsize=12)
+    ax.set_ylabel('Number of Posts', fontsize=12)
+    ax.tick_params(axis='x', rotation=45)
+    
+    # Add value labels on bars
+    for bar in bars:
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+               f'{int(height)}', ha='center', va='bottom')
+    
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "likes_comments_over_time.png"))
+    
+    # Convert to base64
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+    buffer.seek(0)
+    charts['day_chart'] = base64.b64encode(buffer.getvalue()).decode()
     plt.close()
-
-def plot_best_time_to_post(df, output_dir="./static/plots"):
-    os.makedirs(output_dir, exist_ok=True)
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df["hour"] = df["timestamp"].dt.hour
-    df["day_of_week"] = df["timestamp"].dt.day_name()
-
-    # Average likes by hour
-    avg_likes_by_hour = df.groupby("hour")["likes"].mean().reset_index()
-    plt.figure(figsize=(10, 5))
-    sns.barplot(x="hour", y="likes", data=avg_likes_by_hour)
-    plt.xlabel("Hour of Day")
-    plt.ylabel("Average Likes")
-    plt.title("Average Likes by Hour of Day")
+    
+    # Hour chart
+    fig, ax = plt.subplots(figsize=(12, 6))
+    bars = ax.bar(hour_counts.index, hour_counts.values, color='lightcoral', edgecolor='darkred', alpha=0.7)
+    ax.set_title('Posts by Hour of Day (Demo Data)', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Hour of Day', fontsize=12)
+    ax.set_ylabel('Number of Posts', fontsize=12)
+    ax.set_xticks(range(0, 24))
+    
+    # Add value labels on bars
+    for bar in bars:
+        height = bar.get_height()
+        if height > 0:
+            ax.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                   f'{int(height)}', ha='center', va='bottom')
+    
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "avg_likes_by_hour.png"))
+    
+    # Convert to base64
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+    buffer.seek(0)
+    charts['hour_chart'] = base64.b64encode(buffer.getvalue()).decode()
     plt.close()
-
-    # Average likes by day of week
-    day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    df["day_of_week"] = pd.Categorical(df["day_of_week"], categories=day_order, ordered=True)
-    avg_likes_by_day = df.groupby("day_of_week")["likes"].mean().reset_index().sort_values("day_of_week")
-    plt.figure(figsize=(10, 5))
-    sns.barplot(x="day_of_week", y="likes", data=avg_likes_by_day)
-    plt.xlabel("Day of Week")
-    plt.ylabel("Average Likes")
-    plt.title("Average Likes by Day of Week")
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "avg_likes_by_day.png"))
-    plt.close()
-
-def plot_post_type_performance(df, output_dir="./static/plots"):
-    os.makedirs(output_dir, exist_ok=True)
-    post_type_performance = df.groupby("post_type")["likes"].mean().reset_index()
-
-    fig = px.bar(post_type_performance, x="post_type", y="likes",
-                 title="Average Likes by Post Type",
-                 labels={"post_type": "Post Type", "likes": "Average Likes"})
-    fig.write_image(os.path.join(output_dir, "post_type_performance.png"))
-
-# --- Demo Data Function (from demo_data.py) ---
-def create_demo_data():
-    """Create demo Instagram data for testing the application"""
     
-    # Sample Instagram posts data
-    demo_posts = [
-        {
-            'post_id': 1,
-            'caption': 'Amazing sunset at the beach! Perfect end to a wonderful day. #sunset #beach #nature #photography #peaceful',
-            'likes': 1250,
-            'comments': 89,
-            'views': None,
-            'post_type': 'image',
-            'timestamp': datetime.datetime(2024, 1, 15, 18, 30)
-        },
-        {
-            'post_id': 2,
-            'caption': 'New workout routine is killing it! Feeling stronger every day 💪 #fitness #workout #motivation #health #gym',
-            'likes': 890,
-            'comments': 45,
-            'views': None,
-            'post_type': 'image',
-            'timestamp': datetime.datetime(2024, 1, 16, 7, 15)
-        },
-        {
-            'post_id': 3,
-            'caption': 'Delicious homemade pasta tonight! Recipe in my stories 🍝 #cooking #pasta #homemade #foodie #italian',
-            'likes': 2100,
-            'comments': 156,
-            'views': 5600,
-            'post_type': 'video',
-            'timestamp': datetime.datetime(2024, 1, 17, 19, 45)
-        },
-        {
-            'post_id': 4,
-            'caption': 'Monday blues hitting hard today. Need more coffee ☕ #monday #coffee #tired #work #mood',
-            'likes': 567,
-            'comments': 23,
-            'views': None,
-            'post_type': 'image',
-            'timestamp': datetime.datetime(2024, 1, 22, 9, 30)
-        },
-        {
-            'post_id': 5,
-            'caption': 'Incredible concert last night! The energy was absolutely amazing 🎵 #concert #music #live #energy #amazing',
-            'likes': 1890,
-            'comments': 234,
-            'views': 8900,
-            'post_type': 'video',
-            'timestamp': datetime.datetime(2024, 1, 23, 23, 15)
-        },
-        {
-            'post_id': 6,
-            'caption': 'Quiet morning with my book and tea. Sometimes the simple moments are the best ☕📚 #reading #tea #peaceful #morning #books',
-            'likes': 1456,
-            'comments': 67,
-            'views': None,
-            'post_type': 'image',
-            'timestamp': datetime.datetime(2024, 1, 24, 8, 45)
-        },
-        {
-            'post_id': 7,
-            'caption': 'Terrible weather ruined our picnic plans. So disappointed 😞 #weather #rain #disappointed #plans #weekend',
-            'likes': 234,
-            'comments': 12,
-            'views': None,
-            'post_type': 'image',
-            'timestamp': datetime.datetime(2024, 1, 25, 14, 20)
-        },
-        {
-            'post_id': 8,
-            'caption': 'New art project finished! Spent weeks on this painting 🎨 #art #painting #creative #artist #proud',
-            'likes': 3200,
-            'comments': 189,
-            'views': 12000,
-            'post_type': 'video',
-            'timestamp': datetime.datetime(2024, 1, 26, 16, 30)
-        },
-        {
-            'post_id': 9,
-            'caption': 'Family dinner was perfect tonight. Love spending time with everyone ❤️ #family #dinner #love #together #grateful',
-            'likes': 2890,
-            'comments': 145,
-            'views': None,
-            'post_type': 'image',
-            'timestamp': datetime.datetime(2024, 1, 27, 20, 15)
-        },
-        {
-            'post_id': 10,
-            'caption': 'Hiking adventure in the mountains! The views were breathtaking 🏔️ #hiking #mountains #adventure #nature #views',
-            'likes': 4567,
-            'comments': 298,
-            'views': 15600,
-            'post_type': 'video',
-            'timestamp': datetime.datetime(2024, 1, 28, 15, 45)
-        }
-    ]
-    
-    return pd.DataFrame(demo_posts)
+    return charts
 
-# --- Flask App Routes (from app.py) ---
-@app.route('/')
-def index():
-    return send_file('index.html')
-
-@app.route('/scrape', methods=['POST'])
-def scrape():
-    global scraped_data
-    username = request.json.get('username')
-    
-    if not username:
-        return jsonify({'error': 'Username is required'}), 400
-    
+@app.route('/api/instagram/analyze', methods=['POST'])
+def analyze_instagram():
+    """Main endpoint for Instagram analysis"""
     try:
-        # Check if demo mode (username is 'demo')
-        if username.lower() == 'demo':
-            scraped_data = create_demo_data()
-        else:
-            # Scrape Instagram data
-            scraped_data = scrape_instagram_profile(username)
-            
-            if scraped_data.empty:
-                return jsonify({'error': 'No data found for this username. Try "demo" for sample data.'}), 404
+        data = request.get_json()
+        if not data or 'username' not in data:
+            return jsonify({'success': False, 'error': 'Username is required'}), 400
         
-        # Perform analysis
-        scraped_data['sentiment'] = scraped_data['caption'].apply(analyze_sentiment)
-        hashtag_freq = get_hashtag_frequency(scraped_data)
-        keywords = extract_keywords_frequency(scraped_data)
+        analyzer = InstagramAnalyzer()
+        username = analyzer.extract_username(data['username'])
         
-        # Generate visualizations
-        plot_likes_comments_over_time(scraped_data)
-        plot_best_time_to_post(scraped_data)
-        plot_post_type_performance(scraped_data)
+        # Get posts data
+        result = analyzer.get_profile_posts(username)
+        if not result['success']:
+            return jsonify(result), 400
         
-        # Train engagement prediction model (placeholder, no actual training)
-        model, features = train_engagement_prediction_model(scraped_data)
+        # Analyze patterns
+        analysis = analyzer.analyze_posting_patterns(result['posts'])
+        if not analysis['success']:
+            return jsonify(analysis), 400
         
-        # Prepare response data
-        response_data = {
-            'total_posts': len(scraped_data),
-            'avg_likes': scraped_data['likes'].mean(),
-            'avg_comments': scraped_data['comments'].mean(),
-            'sentiment_distribution': scraped_data['sentiment'].value_counts().to_dict(),
-            'top_hashtags': dict(hashtag_freq.most_common(10)),
-            'posts': scraped_data.to_dict('records')
+        # Combine results
+        final_result = {
+            'success': True,
+            'username': result['username'],
+            'total_posts_analyzed': result['total_posts'],
+            'profile_info': result['profile_info'],
+            'day_analysis': analysis['day_analysis'],
+            'hour_analysis': analysis['hour_analysis'],
+            'charts': analysis['charts'],
+            'post_table': analysis['post_table']
         }
         
-        return jsonify(response_data)
+        return jsonify(final_result)
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
 
-@app.route('/download_csv')
-def download_csv():
-    global scraped_data
-    if scraped_data is None or scraped_data.empty:
-        return jsonify({'error': 'No data available'}), 404
-    
-    csv_path = 'instagram_data.csv'
-    scraped_data.to_csv(csv_path, index=False)
-    return send_file(csv_path, as_attachment=True)
+@app.route('/api/instagram/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({'status': 'healthy', 'service': 'Instagram Analyzer'})
 
-@app.route('/plots/<filename>')
-def serve_plot(filename):
-    return send_file(f'static/plots/{filename}')
+@app.route('/api/test/demo', methods=['POST'])
+def demo_analysis():
+    """Demo endpoint with mock data"""
+    try:
+        # Generate mock data
+        posts_data = generate_mock_data()
+        
+        # Analyze patterns
+        analysis = analyze_mock_patterns(posts_data)
+        
+        # Create mock profile info
+        mock_profile = {
+            'followers': 150000000,  # 150M followers like Nike
+            'following': 150,
+            'total_posts': 5000
+        }
+        
+        # Combine results
+        result = {
+            'success': True,
+            'username': 'demo_account',
+            'total_posts_analyzed': len(posts_data),
+            'profile_info': mock_profile,
+            'day_analysis': analysis['day_analysis'],
+            'hour_analysis': analysis['hour_analysis'],
+            'charts': analysis['charts'],
+            'post_table': analysis['post_table']
+        }
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Demo error: {str(e)}'}), 500
+
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve(path):
+    if path != "" and os.path.exists(path):
+        return send_from_directory('.', path)
+    else:
+        if os.path.exists('index.html'):
+            return send_from_directory('.', 'index.html')
+        else:
+            return "index.html not found", 404
 
 if __name__ == '__main__':
-    # Create static directories
-    os.makedirs('static/plots', exist_ok=True)
-    
     app.run(host='0.0.0.0', port=5000, debug=True)
-
 
