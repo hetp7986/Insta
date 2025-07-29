@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Instagram Competitor Analyzer</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f4f4; padding: 30px; }
+    .container { background: white; padding: 20px; border-radius: 8px; max-width: 600px; margin: auto; }
+    input, button, select {
+      width: 100%; padding: 10px; margin-top: 10px; border: 1px solid #ccc; border-radius: 5px;
+    }
+    button {
+      background-color: #007BFF; color: white; font-weight: bold;
+      cursor: pointer; transition: background 0.3s ease;
+    }
+    button:hover { background-color: #0056b3; }
+    .message { margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Instagram Competitor Analyzer</h2>
+    <form method="POST">
+      <label>Enter Competitor Username:</label>
+      <input type="text" name="username" placeholder="e.g., natgeo" required>
+
+      <label>How many recent posts to analyze?</label>
+      <input type="number" name="num_posts" value="10" min="1" max="100">
+
+      <button type="submit">Analyze</button>
+    </form>
+
+    {% if result %}
+      <div class="message">
+        <h3>Analysis Summary</h3>
+        <p><strong>Most common posting day:</strong> {{ result.most_common_day }}</p>
+        <p><strong>Most common posting hour:</strong> {{ result.most_common_hour }}:00</p>
+        <a href="{{ file_url }}"><button>Download CSV Report</button></a>
+      </div>
+    {% elif error %}
+      <div class="message" style="color: red;"><strong>Error:</strong> {{ error }}</div>
+    {% endif %}
+  </div>
+</body>
+</html>
