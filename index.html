@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instagram Competitor Analyzer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        /* Custom CSS for Instagram Analyzer */
+
+        :root {
+            --primary-color: #405de6;
+            --secondary-color: #5851db;
+            --success-color: #28a745;
+            --info-color: #17a2b8;
+            --warning-color: #ffc107;
+            --danger-color: #dc3545;
+            --light-color: #f8f9fa;
+            --dark-color: #343a40;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            transition: all 0.3s ease;
+        }
+
+        .navbar-brand {
+            font-weight: bold;
+            font-size: 1.5rem;
+        }
+
+        .card {
+            border: none;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.15);
+        }
+
+        .btn {
+            border-radius: 25px;
+            padding: 10px 20px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .input-group .form-control {
+            border-radius: 25px 0 0 25px;
+            border: 2px solid #e9ecef;
+            padding: 12px 20px;
+        }
+
+        .input-group .btn {
+            border-radius: 0 25px 25px 0;
+            border: 2px solid var(--primary-color);
+        }
+
+        .spinner-border {
+            width: 3rem;
+            height: 3rem;
+        }
+
+        /* Dark mode styles */
+        body.dark-mode {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            color: #ecf0f1;
+        }
+
+        body.dark-mode .card {
+            background-color: #34495e;
+            color: #ecf0f1;
+        }
+
+        body.dark-mode .table {
+            color: #ecf0f1;
+        }
+
+        body.dark-mode .table-striped > tbody > tr:nth-of-type(odd) > td {
+            background-color: rgba(255, 255, 255, 0.05);
+        }
+
+        /* Animation for loading */
+        @keyframes pulse {
+            0% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+            100% {
+                opacity: 1;
+            }
+        }
+
+        .loading {
+            animation: pulse 2s infinite;
+        }
+
+        /* Responsive design */
+        @media (max-width: 768px) {
+            .container {
+                padding: 0 15px;
+            }
+            
+            .card-body {
+                padding: 1rem;
+            }
+            
+            .btn {
+                padding: 8px 16px;
+                font-size: 0.9rem;
+            }
+        }
+
+        /* Chart containers */
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin: 20px 0;
+        }
+
+        /* Hashtags styling */
+        .hashtag-item {
+            display: inline-block;
+            background: linear-gradient(45deg, var(--primary-color), var(--secondary-color));
+            color: white;
+            padding: 5px 12px;
+            margin: 3px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        /* Strategy tips styling */
+        #tipsList li {
+            margin-bottom: 10px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            border-left: 4px solid var(--primary-color);
+        }
+
+        /* Table styling */
+        .table th {
+            background: linear-gradient(45deg, var(--primary-color), var(--secondary-color));
+            color: white;
+            border: none;
+            font-weight: 600;
+        }
+
+        .table td {
+            vertical-align: middle;
+            border-color: rgba(0, 0, 0, 0.1);
+        }
+
+        /* Sentiment badges */
+        .sentiment-positive {
+            background-color: var(--success-color);
+            color: white;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+        }
+
+        .sentiment-negative {
+            background-color: var(--danger-color);
+            color: white;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+        }
+
+        .sentiment-neutral {
+            background-color: var(--info-color);
+            color: white;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <!-- Header -->
+        <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+            <div class="container">
+                <a class="navbar-brand" href="#">📊 Instagram Analyzer</a>
+                <button class="btn btn-outline-light" id="themeToggle">🌙 Dark Mode</button>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <div class="container mt-4">
+            <!-- Input Section -->
+            <div class="row">
+                <div class="col-md-8 mx-auto">
+                    <div class="card shadow">
+                        <div class="card-body">
+                            <h2 class="card-title text-center mb-4">Analyze Instagram Profile</h2>
+                            <div class="input-group mb-3">
+                                <input type="text" class="form-control" id="usernameInput" placeholder="Enter Instagram username (e.g., nasa) or 'demo' for sample data">
+                                <button class="btn btn-primary" type="button" id="analyzeBtn">Analyze</button>
+                            </div>
+                            <div class="text-center mb-3">
+                                <small class="text-muted">
+                                    💡 Tip: Use "demo" to see sample analysis with generated data, or try public usernames like "nasa", "natgeo"
+                                </small>
+                            </div>
+                            <div id="loadingSpinner" class="text-center d-none">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                                <p class="mt-2">Scraping and analyzing data...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results Section -->
+            <div id="resultsSection" class="d-none">
+                <!-- Summary Cards -->
+                <div class="row mt-4">
+                    <div class="col-md-3">
+                        <div class="card bg-primary text-white">
+                            <div class="card-body">
+                                <h5 class="card-title">Total Posts</h5>
+                                <h2 id="totalPosts">-</h2>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card bg-success text-white">
+                            <div class="card-body">
+                                <h5 class="card-title">Avg Likes</h5>
+                                <h2 id="avgLikes">-</h2>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card bg-info text-white">
+                            <div class="card-body">
+                                <h5 class="card-title">Avg Comments</h5>
+                                <h2 id="avgComments">-</h2>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card bg-warning text-white">
+                            <div class="card-body">
+                                <h5 class="card-title">Actions</h5>
+                                <button class="btn btn-light btn-sm" id="downloadBtn">📥 Download CSV</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Charts Section -->
+                <div class="row mt-4">
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5>Likes & Comments Over Time</h5>
+                            </div>
+                            <div class="card-body">
+                                <img id="timeChart" src="" class="img-fluid" alt="Time Chart">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5>Best Time to Post</h5>
+                            </div>
+                            <div class="card-body">
+                                <img id="hourChart" src="" class="img-fluid" alt="Hour Chart">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row mt-4">
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5>Best Day to Post</h5>
+                            </div>
+                            <div class="card-body">
+                                <img id="dayChart" src="" class="img-fluid" alt="Day Chart">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5>Post Type Performance</h5>
+                            </div>
+                            <div class="card-body">
+                                <img id="typeChart" src="" class="img-fluid" alt="Type Chart">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sentiment Analysis -->
+                <div class="row mt-4">
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5>Sentiment Distribution</h5>
+                            </div>
+                            <div class="card-body">
+                                <canvas id="sentimentChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5>Top Hashtags</h5>
+                            </div>
+                            <div class="card-body">
+                                <div id="hashtagsList"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Posts Table -->
+                <div class="row mt-4">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5>Recent Posts</h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table table-striped" id="postsTable">
+                                        <thead>
+                                            <tr>
+                                                <th>Date</th>
+                                                <th>Caption</th>
+                                                <th>Likes</th>
+                                                <th>Comments</th>
+                                                <th>Type</th>
+                                                <th>Sentiment</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="postsTableBody">
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- AI Strategy Tips -->
+                <div class="row mt-4">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5>🤖 AI-Generated Strategy Tips</h5>
+                            </div>
+                            <div class="card-body">
+                                <div id="strategyTips">
+                                    <p>Based on the analysis, here are some recommendations:</p>
+                                    <ul id="tipsList">
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+        // Instagram Analyzer JavaScript
+
+        let currentData = null;
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const analyzeBtn = document.getElementById('analyzeBtn');
+            const usernameInput = document.getElementById('usernameInput');
+            const loadingSpinner = document.getElementById('loadingSpinner');
+            const resultsSection = document.getElementById('resultsSection');
+            const themeToggle = document.getElementById('themeToggle');
+            const downloadBtn = document.getElementById('downloadBtn');
+
+            // Theme toggle functionality
+            themeToggle.addEventListener('click', function() {
+                document.body.classList.toggle('dark-mode');
+                const isDark = document.body.classList.contains('dark-mode');
+                themeToggle.textContent = isDark ? '☀️ Light Mode' : '🌙 Dark Mode';
+                localStorage.setItem('darkMode', isDark);
+            });
+
+            // Load saved theme
+            if (localStorage.getItem('darkMode') === 'true') {
+                document.body.classList.add('dark-mode');
+                themeToggle.textContent = '☀️ Light Mode';
+            }
+
+            // Analyze button click
+            analyzeBtn.addEventListener('click', function() {
+                const username = usernameInput.value.trim();
+                if (!username) {
+                    alert('Please enter a username');
+                    return;
+                }
+                analyzeProfile(username);
+            });
+
+            // Enter key support
+            usernameInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    analyzeBtn.click();
+                }
+            });
+
+            // Download button click
+            downloadBtn.addEventListener('click', function() {
+                window.open('/download_csv', '_blank');
+            });
+
+            function analyzeProfile(username) {
+                // Show loading
+                loadingSpinner.classList.remove('d-none');
+                resultsSection.classList.add('d-none');
+                analyzeBtn.disabled = true;
+                analyzeBtn.textContent = 'Analyzing...';
+
+                // Make API call
+                fetch('/scrape', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ username: username })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    currentData = data;
+                    displayResults(data);
+                })
+                .catch(error => {
+                    alert('Error: ' + error.message);
+                })
+                .finally(() => {
+                    // Hide loading
+                    loadingSpinner.classList.add('d-none');
+                    analyzeBtn.disabled = false;
+                    analyzeBtn.textContent = 'Analyze';
+                });
+            }
+
+            function displayResults(data) {
+                // Update summary cards
+                document.getElementById('totalPosts').textContent = data.total_posts;
+                document.getElementById('avgLikes').textContent = Math.round(data.avg_likes);
+                document.getElementById('avgComments').textContent = Math.round(data.avg_comments);
+
+                // Update charts
+                document.getElementById('timeChart').src = '/plots/likes_comments_over_time.png?' + new Date().getTime();
+                document.getElementById('hourChart').src = '/plots/avg_likes_by_hour.png?' + new Date().getTime();
+                document.getElementById('dayChart').src = '/plots/avg_likes_by_day.png?' + new Date().getTime();
+                document.getElementById('typeChart').src = '/plots/post_type_performance.png?' + new Date().getTime();
+
+                // Create sentiment chart
+                createSentimentChart(data.sentiment_distribution);
+
+                // Display hashtags
+                displayHashtags(data.top_hashtags);
+
+                // Display posts table
+                displayPostsTable(data.posts);
+
+                // Generate strategy tips
+                generateStrategyTips(data);
+
+                // Show results
+                resultsSection.classList.remove('d-none');
+            }
+
+            function createSentimentChart(sentimentData) {
+                const ctx = document.getElementById('sentimentChart').getContext('2d');
+                
+                new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: Object.keys(sentimentData),
+                        datasets: [{
+                            data: Object.values(sentimentData),
+                            backgroundColor: [
+                                '#28a745', // positive - green
+                                '#dc3545', // negative - red
+                                '#17a2b8'  // neutral - blue
+                            ],
+                            borderWidth: 2,
+                            borderColor: '#fff'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'bottom'
+                            }
+                        }
+                    }
+                });
+            }
+
+            function displayHashtags(hashtags) {
+                const container = document.getElementById('hashtagsList');
+                container.innerHTML = '';
+                
+                Object.entries(hashtags).forEach(([hashtag, count]) => {
+                    const span = document.createElement('span');
+                    span.className = 'hashtag-item';
+                    span.textContent = `#${hashtag} (${count})`;
+                    container.appendChild(span);
+                });
+            }
+
+            function displayPostsTable(posts) {
+                const tbody = document.getElementById('postsTableBody');
+                tbody.innerHTML = '';
+                
+                posts.slice(0, 10).forEach(post => {
+                    const row = document.createElement('tr');
+                    const date = new Date(post.timestamp).toLocaleDateString();
+                    const caption = post.caption ? post.caption.substring(0, 100) + '...' : 'No caption';
+                    const sentimentClass = `sentiment-${post.sentiment}`;
+                    
+                    row.innerHTML = `
+                        <td>${date}</td>
+                        <td>${caption}</td>
+                        <td>${post.likes}</td>
+                        <td>${post.comments}</td>
+                        <td>${post.post_type}</td>
+                        <td><span class="${sentimentClass}">${post.sentiment}</span></td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            }
+
+            function generateStrategyTips(data) {
+                const tipsList = document.getElementById('tipsList');
+                tipsList.innerHTML = '';
+                
+                const tips = [];
+                
+                // Analyze sentiment
+                const sentiments = data.sentiment_distribution;
+                const totalPosts = Object.values(sentiments).reduce((a, b) => a + b, 0);
+                const positiveRatio = (sentiments.positive || 0) / totalPosts;
+                
+                if (positiveRatio < 0.5) {
+                    tips.push('Consider using more positive language in your captions to improve engagement.');
+                }
+                
+                // Analyze engagement
+                if (data.avg_likes < 100) {
+                    tips.push('Try posting at different times of day to reach more of your audience.');
+                }
+                
+                // Hashtag analysis
+                const hashtagCount = Object.keys(data.top_hashtags).length;
+                if (hashtagCount < 5) {
+                    tips.push('Use more relevant hashtags to increase discoverability.');
+                }
+                
+                // Post type analysis
+                tips.push('Experiment with different post types (images vs videos) to see what resonates with your audience.');
+                
+                // General tips
+                tips.push('Engage with your audience by responding to comments promptly.');
+                tips.push('Post consistently to maintain audience engagement.');
+                
+                tips.forEach(tip => {
+                    const li = document.createElement('li');
+                    li.textContent = tip;
+                    tipsList.appendChild(li);
+                });
+            }
+        });
+    </script>
+</body>
+</html>
+
