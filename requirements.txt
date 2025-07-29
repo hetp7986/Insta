@@ -1,3 +1,7 @@
 flask
-instaloader
 pandas
+instaloader
+matplotlib
+seaborn
+plotly
+kaleido
