@@ -1,64 +1,48 @@
 from flask import Flask, request, render_template_string
+import asyncio
 from playwright.sync_api import sync_playwright
 import pandas as pd
-import datetime
-import re
+from datetime import datetime
 
 app = Flask(__name__)
 
-TEMPLATE = """
-<!doctype html>
+HTML_TEMPLATE = """
+<!DOCTYPE html>
 <html>
 <head>
     <title>Instagram Competitor Analyzer</title>
-    <style>
-        body { font-family: Arial; margin: 2em; background-color: #f0f0f0; }
-        input, button { padding: 8px; margin: 5px; }
-        .card { background: #fff; padding: 1em; margin-bottom: 1em; border-radius: 8px; box-shadow: 0 2px 5px #ccc; }
-        h2 { margin-top: 2em; }
-    </style>
 </head>
 <body>
-    <h1>Instagram Competitor Analyzer</h1>
+    <h1>📊 Instagram Competitor Analyzer</h1>
     <form method="POST">
-        <label>Instagram Username:</label><br>
-        <input name="username" placeholder="e.g. kingbach" required><br>
-        <label>Filter by Date (optional):</label><br>
-        <input name="date" type="date"><br>
-        <button type="submit">Analyze</button>
+        <label>Enter Instagram Username:</label><br>
+        <input type="text" name="username" required><br><br>
+
+        <label>Filter by date (YYYY-MM-DD):</label><br>
+        <input type="text" name="filter_date"><br><br>
+
+        <input type="submit" value="Analyze">
     </form>
 
-    {% if posts %}
-        <h2>Results for @{{ username }}</h2>
-        <p><strong>Total Posts Fetched:</strong> {{ posts|length }}</p>
+    {% if data %}
+        <h2>Analysis Results for {{ username }}</h2>
+        <p><strong>Total Posts:</strong> {{ total_posts }}</p>
 
-        {% if date %}
-            <h3>📅 Posts on {{ date }}</h3>
-            {% for post in posts %}
-                {% if post.timestamp.date() == date_obj %}
-                    <div class="card">
-                        <a href="{{ post.url }}" target="_blank">{{ post.url }}</a><br>
-                        Time: {{ post.timestamp.time() }}<br>
-                        Caption: {{ post.caption[:100] }}...
-                    </div>
-                {% endif %}
-            {% endfor %}
-        {% else %}
-            <h3>📄 All Posts</h3>
-            {% for post in posts %}
-                <div class="card">
-                    <a href="{{ post.url }}" target="_blank">{{ post.url }}</a><br>
-                    Time: {{ post.timestamp }}<br>
-                    Caption: {{ post.caption[:100] }}...
-                </div>
-            {% endfor %}
+        {% if filtered_data %}
+            <h3>Posts on {{ filter_date }}:</h3>
+            <ul>
+                {% for post in filtered_data %}
+                    <li>{{ post['date'] }} - {{ post['caption'][:50] }}...</li>
+                {% endfor %}
+            </ul>
         {% endif %}
 
-        <h3>📈 Growth Suggestions</h3>
+        <h3>Suggested Growth Strategy ({{ niche }} niche):</h3>
         <ul>
-            {% for suggestion in suggestions %}
-                <li>{{ suggestion }}</li>
-            {% endfor %}
+            <li>Post at peak times (9 AM to 11 AM, 6 PM to 8 PM)</li>
+            <li>Use trending audio in reels</li>
+            <li>Engage with similar accounts' audiences</li>
+            <li>Use 5-10 high-quality hashtags related to {{ niche }}</li>
         </ul>
     {% endif %}
 </body>
@@ -69,79 +53,63 @@ def scrape_instagram(username):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page.goto(f"https://www.instagram.com/{username}/")
-        page.wait_for_selector("article")
+        url = f'https://www.instagram.com/{username}/'
+        page.goto(url)
+        page.wait_for_timeout(3000)
 
-        post_links = page.eval_on_selector_all(
-            "article a", "elements => elements.map(e => e.href)"
-        )[:30]
+        content = page.content()
+        if '"edge_owner_to_timeline_media"' not in content:
+            browser.close()
+            return None
+
+        json_data = page.locator('script[type="application/ld+json"]').nth(0).inner_text()
+        page_data = page.locator('script').nth(4).inner_text()
+        start = page_data.find('{"config":')
+        end = page_data.find('};') + 1
+        raw_json = page_data[start:end]
+
+        import json
+        data_json = json.loads(raw_json)
+        posts_data = data_json["entry_data"]["ProfilePage"][0]["graphql"]["user"]["edge_owner_to_timeline_media"]["edges"]
 
         posts = []
-        for link in post_links:
-            page.goto(link)
-            page.wait_for_timeout(2000)
-
-            try:
-                caption = page.locator("xpath=//div[@data-testid='post-comment-root']").first.inner_text()
-            except:
-                caption = "N/A"
-
-            try:
-                time_text = page.locator("time").get_attribute("datetime")
-                timestamp = datetime.datetime.fromisoformat(time_text.replace("Z", "+00:00"))
-            except:
-                timestamp = "N/A"
-
+        for post in posts_data:
+            node = post["node"]
+            timestamp = datetime.fromtimestamp(node["taken_at_timestamp"])
+            caption = node["edge_media_to_caption"]["edges"][0]["node"]["text"] if node["edge_media_to_caption"]["edges"] else ""
             posts.append({
-                "url": link,
-                "caption": caption,
-                "timestamp": timestamp
+                "date": timestamp.strftime("%Y-%m-%d %H:%M"),
+                "caption": caption
             })
 
         browser.close()
         return posts
 
-def generate_suggestions(posts):
-    suggestions = []
-    if len(posts) < 10:
-        suggestions.append("Post more frequently (4–5 times/week recommended).")
-
-    hashtags = [tag for p in posts for tag in re.findall(r"#\w+", p["caption"])]
-    top_tags = pd.Series(hashtags).value_counts().head(5)
-
-    if not top_tags.empty:
-        suggestions.append("Top hashtags used: " + ", ".join(top_tags.index.tolist()))
-    else:
-        suggestions.append("Use more niche-specific hashtags to increase visibility.")
-
-    if any(tag in top_tags.index for tag in ["#funny", "#comedy"]):
-        suggestions.append("Niche detected: Comedy — Use reels with trending audio and short skits.")
-    elif any(tag in top_tags.index for tag in ["#fashion", "#style"]):
-        suggestions.append("Niche detected: Fashion — Post OOTD, style tips, and tag relevant brands.")
-    else:
-        suggestions.append("No strong niche detected. Try using more focused hashtags.")
-    
-    return suggestions
-
-@app.route("/", methods=["GET", "POST"])
+@app.route('/', methods=['GET', 'POST'])
 def index():
-    posts = []
-    suggestions = []
-    username = ''
-    date = request.form.get("date")
-    date_obj = None
+    if request.method == 'POST':
+        username = request.form['username']
+        filter_date = request.form.get('filter_date')
 
-    if request.method == "POST":
-        username = request.form["username"].strip().lower()
         posts = scrape_instagram(username)
-        suggestions = generate_suggestions(posts)
-        if date:
-            try:
-                date_obj = datetime.datetime.strptime(date, "%Y-%m-%d").date()
-            except:
-                date_obj = None
+        if not posts:
+            return "Could not fetch Instagram data. Make sure profile is public."
 
-    return render_template_string(TEMPLATE, posts=posts, username=username, suggestions=suggestions, date=date, date_obj=date_obj)
+        total_posts = len(posts)
+        filtered_data = [p for p in posts if filter_date in p['date']] if filter_date else []
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+        # Simple niche suggestion (you could make this dynamic)
+        niche = "comedy" if "funny" in username or "comedy" in username else "general"
+
+        return render_template_string(HTML_TEMPLATE,
+                                      username=username,
+                                      data=True,
+                                      total_posts=total_posts,
+                                      filtered_data=filtered_data,
+                                      filter_date=filter_date,
+                                      niche=niche)
+
+    return render_template_string(HTML_TEMPLATE)
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=10000)
